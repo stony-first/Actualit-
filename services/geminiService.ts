@@ -1,36 +1,42 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { Category, NewsArticle } from '../types';
 
 const SYSTEM_INSTRUCTION = `
-Tu es "Stony News AI", un agent d’IA journalistique professionnel.
-Ta mission est de fournir des résumés factuels issus de sources vérifiées.
+Tu es "Stony News AI", un agent d’IA journalistique professionnel rigoureux.
+Ton objectif est de fournir des résumés factuels basés UNIQUEMENT sur des sources fiables.
 
 FORMAT DE SORTIE (STRICT) :
-Pour chaque article trouvé, utilise :
+Génère pour chaque actualité :
 ---ARTICLE---
-Titre: [Titre informatif]
-Résumé: [Résumé de 5-7 lignes : Qui, Quoi, Où, Quand, Pourquoi]
-Catégorie: [Politique, Économie, Sécurité, Société, Santé, Technologie, Sport, International]
+Titre: [Titre informatif court]
+Résumé: [5 à 7 lignes expliquant Qui, Quoi, Où, Quand, Pourquoi]
+Catégorie: [Choisir parmis: Politique, Économie, Sécurité, Société, Santé, Technologie, Sport, International]
 ---FIN---
 
-RÈGLES DE SOURCAGE :
-- Priorise BBC, RFI, France 24, Jeune Afrique, Reuters, AP.
-- Si une information est incertaine, utilise des termes prudents ("selon les premières informations", "sous réserve de confirmation").
-- Ne cite que des faits.
+RÈGLES :
+- Utilise la recherche Google pour trouver les dernières nouvelles.
+- Cite les sources (BBC, RFI, France 24, Jeune Afrique, etc.).
+- Ne jamais inventer de faits. Si pas d'info, ne rien générer.
 `;
 
 export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
-  // Initialisation à chaque appel pour garantir l'usage de la clé la plus récente
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Récupération sécurisée de la clé API
+  const apiKey = process.env.API_KEY;
+  
+  if (!apiKey || apiKey === "undefined") {
+    throw new Error("Clé API non détectée. Assurez-vous de l'avoir configurée dans les variables d'environnement Vercel.");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `Rédige un dossier de presse sur : "${query}". Cite explicitement les médias sources.`,
+      model: 'gemini-3-flash-preview', // Modèle standard optimisé pour la vitesse et les limites
+      contents: `Rédige un dossier de presse actualisé sur : "${query}". Utilise la recherche Google pour les faits récents.`,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
         tools: [{ googleSearch: {} }],
+        temperature: 0.2,
       },
     });
 
@@ -45,12 +51,12 @@ export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
         url: chunk.web?.uri || "#"
       }));
 
-    const articleBlocks = text.split("---ARTICLE---").filter(b => b.trim().length > 10);
+    const articleBlocks = text.split("---ARTICLE---").filter(b => b.trim().length > 20);
     
     return articleBlocks.map((block, index) => {
       const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
       
-      let title = "Actualité";
+      let title = "Flash Info";
       let summary = "";
       let category = Category.INTERNATIONAL;
 
@@ -63,12 +69,11 @@ export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
         }
       });
 
-      const sourcesForThisArticle = webSources.length > 0 
-        ? webSources.slice(index * 2, (index * 2) + 2) 
-        : [];
+      // On limite à 2 sources par article pour la clarté
+      const sourcesForThisArticle = webSources.slice(index * 2, (index * 2) + 2);
 
       return {
-        id: `sn-${Date.now()}-${index}`,
+        id: `stony-${Date.now()}-${index}`,
         title,
         summary,
         category,
@@ -77,8 +82,11 @@ export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
       };
     });
 
-  } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw new Error("Impossible de joindre les agences de presse. Vérifiez votre clé API.");
+  } catch (error: any) {
+    console.error("Gemini Error:", error);
+    if (error.message?.includes("API key")) {
+      throw new Error("Clé API invalide ou non autorisée. Vérifiez votre configuration Google AI Studio.");
+    }
+    throw new Error("Erreur lors de la récupération des données. Réessayez dans quelques instants.");
   }
 };
