@@ -14,79 +14,100 @@ Catégorie: [Choisir parmis: Politique, Économie, Sécurité, Société, Santé
 ---FIN---
 
 RÈGLES :
-- Utilise la recherche Google pour trouver les dernières nouvelles.
-- Cite les sources (BBC, RFI, France 24, Jeune Afrique, etc.).
-- Ne jamais inventer de faits. Si pas d'info, ne rien générer.
+- Si la recherche Google est disponible, cite les sources.
+- Ne jamais inventer de faits. Reste neutre et factuel.
 `;
 
 export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
-  // Récupération sécurisée de la clé API
   const apiKey = process.env.API_KEY;
   
   if (!apiKey || apiKey === "undefined") {
-    throw new Error("Clé API non détectée. Assurez-vous de l'avoir configurée dans les variables d'environnement Vercel.");
+    throw new Error("Clé API (API_KEY) non configurée dans Vercel.");
   }
 
   const ai = new GoogleGenAI({ apiKey });
+  const modelName = 'gemini-3-flash-preview';
   
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview', // Modèle standard optimisé pour la vitesse et les limites
-      contents: `Rédige un dossier de presse actualisé sur : "${query}". Utilise la recherche Google pour les faits récents.`,
+  const generate = async (useSearch: boolean) => {
+    return await ai.models.generateContent({
+      model: modelName,
+      contents: `Analyse journalistique approfondie sur : "${query}".`,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
-        tools: [{ googleSearch: {} }],
+        tools: useSearch ? [{ googleSearch: {} }] : [],
         temperature: 0.2,
       },
     });
+  };
 
-    const text = response.text || "";
+  try {
+    let response;
+    try {
+      // Tentative 1 : Avec recherche Google
+      response = await generate(true);
+    } catch (searchError: any) {
+      console.warn("Recherche Google indisponible, passage au mode standard.", searchError);
+      // Tentative 2 : Sans recherche Google (Fallback si région non supportée)
+      response = await generate(false);
+    }
+
+    if (!response || !response.text) {
+      throw new Error("L'IA n'a pas pu générer de contenu.");
+    }
+
+    const text = response.text;
     const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
     const groundingChunks = groundingMetadata?.groundingChunks || [];
     
     const webSources = groundingChunks
       .filter(chunk => chunk.web)
       .map(chunk => ({
-        title: chunk.web?.title || "Source Certifiée",
+        title: chunk.web?.title || "Source Web",
         url: chunk.web?.uri || "#"
       }));
 
     const articleBlocks = text.split("---ARTICLE---").filter(b => b.trim().length > 20);
     
+    // Si aucun bloc n'est trouvé, on traite le texte brut
+    if (articleBlocks.length === 0) {
+      return [{
+        id: `stony-raw-${Date.now()}`,
+        title: `Dernières infos : ${query}`,
+        summary: text.replace(/---ARTICLE---|---FIN---/g, '').trim().substring(0, 600),
+        category: Category.INTERNATIONAL,
+        sources: webSources,
+        timestamp: "Direct"
+      }];
+    }
+
     return articleBlocks.map((block, index) => {
       const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-      
-      let title = "Flash Info";
+      let title = "Actualité";
       let summary = "";
       let category = Category.INTERNATIONAL;
 
       lines.forEach(line => {
-        if (line.toLowerCase().startsWith("titre:")) title = line.replace(/titre:/i, "").trim();
-        if (line.toLowerCase().startsWith("résumé:")) summary = line.replace(/résumé:/i, "").trim();
-        if (line.toLowerCase().startsWith("catégorie:")) {
-          const catStr = line.replace(/catégorie:/i, "").trim();
-          category = Object.values(Category).find(c => c.toLowerCase() === catStr.toLowerCase()) || Category.INTERNATIONAL;
+        const lower = line.toLowerCase();
+        if (lower.startsWith("titre:")) title = line.split(/titre:/i)[1]?.trim() || title;
+        if (lower.startsWith("résumé:")) summary = line.split(/résumé:/i)[1]?.trim() || summary;
+        if (lower.startsWith("catégorie:")) {
+          const catStr = line.split(/catégorie:/i)[1]?.trim();
+          category = Object.values(Category).find(c => c.toLowerCase() === catStr?.toLowerCase()) || Category.INTERNATIONAL;
         }
       });
-
-      // On limite à 2 sources par article pour la clarté
-      const sourcesForThisArticle = webSources.slice(index * 2, (index * 2) + 2);
 
       return {
         id: `stony-${Date.now()}-${index}`,
         title,
         summary,
         category,
-        sources: sourcesForThisArticle,
+        sources: webSources.length > 0 ? webSources.slice(index * 2, (index * 2) + 2) : [],
         timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
       };
     });
 
   } catch (error: any) {
-    console.error("Gemini Error:", error);
-    if (error.message?.includes("API key")) {
-      throw new Error("Clé API invalide ou non autorisée. Vérifiez votre configuration Google AI Studio.");
-    }
-    throw new Error("Erreur lors de la récupération des données. Réessayez dans quelques instants.");
+    console.error("Erreur critique:", error);
+    throw new Error(error.message || "Problème de connexion au service d'IA.");
   }
 };
