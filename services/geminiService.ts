@@ -21,6 +21,7 @@ RÈGLES DE SOURCAGE :
 `;
 
 export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
+  // Initialisation à chaque appel pour garantir l'usage de la clé la plus récente
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   try {
@@ -37,7 +38,6 @@ export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
     const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
     const groundingChunks = groundingMetadata?.groundingChunks || [];
     
-    // Extraire les sources réelles de la recherche Google
     const webSources = groundingChunks
       .filter(chunk => chunk.web)
       .map(chunk => ({
@@ -63,7 +63,6 @@ export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
         }
       });
 
-      // Assigner des sources pertinentes par bloc (ou toutes si peu d'articles)
       const sourcesForThisArticle = webSources.length > 0 
         ? webSources.slice(index * 2, (index * 2) + 2) 
         : [];
@@ -80,6 +79,6 @@ export const fetchNews = async (query: string): Promise<NewsArticle[]> => {
 
   } catch (error) {
     console.error("Gemini API Error:", error);
-    throw new Error("Erreur de liaison avec les agences de presse. Réessayez.");
+    throw new Error("Impossible de joindre les agences de presse. Vérifiez votre clé API.");
   }
 };
